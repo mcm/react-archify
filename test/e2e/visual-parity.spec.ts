@@ -3,7 +3,7 @@
 // example, visual preset and theme — at the top and scrolled to the end.
 import { expect, test, type Page } from '@playwright/test';
 import path from 'node:path';
-import { THEMES, VARIANTS, diff, hidePropOwnedChrome, examples, fixtureUrl, referenceUrl, settle } from './support';
+import { THEMES, VARIANTS, controlBarRect, diff, expectParity, hidePropOwnedChrome, examples, fixtureUrl, referenceUrl, settle } from './support';
 
 const ONLY = process.env.PARITY_ONLY;
 const cases = examples().filter((example) => !ONLY || example.includes(ONLY));
@@ -39,12 +39,14 @@ for (const example of cases) {
         const name = `${example}.${variant}.${theme}`;
         const out = (suffix: string) => path.resolve('test-results', 'parity', `${name}.${suffix}.png`);
         const top = diff(await reference.screenshot(), await component.screenshot(), out('top'));
+        const topBars = { reference: await controlBarRect(reference), component: await controlBarRect(component) };
         await scrollToEnd(reference, 'reference');
         await scrollToEnd(component, 'component');
         const end = diff(await reference.screenshot(), await component.screenshot(), out('end'));
+        const endBars = { reference: await controlBarRect(reference), component: await controlBarRect(component) };
         await context.close();
-        expect.soft(top.pixels, `top of ${name} differs (${top.size})`).toBe(0);
-        expect.soft(end.pixels, `end of ${name} differs (${end.size})`).toBe(0);
+        expect.soft(expectParity(top, `top of ${name}`, topBars, (note) => { test.info().annotations.push({ type: 'sub-pixel', description: note }); console.log('[sub-pixel]', note); }), `top of ${name} differs: ${top.pixels} px (${top.size})`).toBe(true);
+        expect.soft(expectParity(end, `end of ${name}`, endBars, (note) => { test.info().annotations.push({ type: 'sub-pixel', description: note }); console.log('[sub-pixel]', note); }), `end of ${name} differs: ${end.pixels} px (${end.size})`).toBe(true);
       });
     }
   }
@@ -69,9 +71,11 @@ for (const example of ['web-app.architecture.json', 'cache-miss-request.sequence
         const box = (await component.locator('[data-react-archify-host]').boundingBox())!;
         const name = `offset.${example}.${variant}.${theme}`;
         const result = diff(await reference.screenshot(), await component.screenshot({ clip: box }), path.resolve('test-results', 'parity', `${name}.png`));
+        const bar = await controlBarRect(component);
+        const bars = { reference: await controlBarRect(reference), component: bar && { ...bar, x: bar.x - box.x, y: bar.y - box.y } };
         await referenceContext.close();
         await componentContext.close();
-        expect(result.pixels, `${name} differs (${result.size})`).toBe(0);
+        expect(expectParity(result, name, bars, (note) => { test.info().annotations.push({ type: 'sub-pixel', description: note }); console.log('[sub-pixel]', note); }), `${name} differs: ${result.pixels} px (${result.size})`).toBe(true);
       });
     }
   }

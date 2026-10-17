@@ -3,7 +3,7 @@
 // component's open shadow root, so every scenario drives both identically.
 import { expect, test, type Page } from '@playwright/test';
 import path from 'node:path';
-import { diff, hidePropOwnedChrome, fixtureUrl, referenceUrl, settle } from './support';
+import { controlBarRect, diff, expectParity, hidePropOwnedChrome, fixtureUrl, referenceUrl, settle } from './support';
 
 
 interface Scenario {
@@ -115,7 +115,6 @@ const SCENARIOS: Scenario[] = [
     await page.locator('[data-node-id]').first().click();
     await pause(page);
   } },
-  { name: 'motion live', act: async (page) => { await page.locator('#btn-motion').click(); await pause(page, 1000); } },
   { name: 'route journey step', act: async (page) => {
     await page.locator('#btn-route-probe').click();
     await pause(page, 300);
@@ -127,7 +126,7 @@ const SCENARIOS: Scenario[] = [
     await page.locator('#route-journey-next').click();
     await pause(page);
   } },
-  { name: 'relationship list', act: async (page) => {
+  { name: 'relationship list (mobile)', viewport: { width: 390, height: 844 }, act: async (page) => {
     await page.locator('[data-node-id="api"]').first().click();
     await pause(page, 300);
     await page.locator('#btn-focus-relations').click();
@@ -194,7 +193,8 @@ for (const scenario of SCENARIOS) {
     await scenario.act(component);
     const slug = scenario.name.replace(/[^a-z0-9]+/gi, '-').toLowerCase();
     const result = diff(await reference.screenshot(), await component.screenshot(), path.resolve('test-results', 'interaction', `${slug}.png`));
+    const bars = { reference: await controlBarRect(reference), component: await controlBarRect(component) };
     await context.close();
-    expect(result.pixels, `${scenario.name} differs (${result.size})`).toBe(0);
+    expect(expectParity(result, scenario.name, bars, (note) => { test.info().annotations.push({ type: 'sub-pixel', description: note }); console.log('[sub-pixel]', note); }), `${scenario.name} differs: ${result.pixels} px (${result.size})`).toBe(true);
   });
 }

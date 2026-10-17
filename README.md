@@ -154,20 +154,35 @@ one page therefore never collide, and the page's CSS cannot reach them.
 
 ### Parity tests
 
-`npm run test:e2e` builds reference artifacts with the Archify CLI and
-compares them with the component, pixel by pixel:
+`npm test` renders every Archify example with the browser renderers and checks
+that the HTML is byte-identical to the Archify CLI's output.
+
+`npm run test:e2e` builds reference artifacts with the Archify CLI and compares
+them with the component in Chromium, pixel by pixel:
 
 - all 25 Archify examples × 4 variants × 2 themes, at the top and scrolled to
-  the end, in a 1440×900 window;
-- a component box embedded at an offset in a scrolling page, compared with
-  Archify in a window the size of the box;
-- reader interactions on both (focus, hover, reach, routes, lens, zoom, pan,
-  finder, guide, export menu, maximize, keyboard shortcuts, rail placement and
-  collapse, deep links, narrow layouts);
-- byte-identical SVG exports and pixel-identical PNG exports;
+  the end, in a 1440×900 window (400 comparisons);
+- a component box embedded at an offset in a scrolling host page, compared
+  with Archify in a window the size of the box;
+- reader interactions on both pages (focus, hover, reach, routes and Route
+  Journey, lens, zoom, pan, overview map, finder, guide, export menu, maximize,
+  keyboard shortcuts, rail placement and collapse, deep links, tree branches,
+  localized documents, narrow and mobile layouts);
+- byte-identical SVG exports, plus pixel-identical PNG and share-card exports;
 - the props: live variant, theme and notes changes, the visibility toggles,
-  URL modes, controlled views, two instances on one page, unmount cleanup,
-  errors, and `html` input.
+  URL modes, controlled views, motion, two instances on one page, unmount
+  cleanup, errors, and `html` input.
+
+Results: 384 of the 400 matrix comparisons are pixel-identical, as are all the
+other tests. The remaining 16 are four examples in light theme
+(payment-processors, production-deployment, brand-aware-delivery,
+archify-dev-activity). In those, Chrome rasterizes the bottom-right control
+bar's glyphs a fraction of a pixel differently. Standalone, Archify's content
+sits in Chrome's root-scroller layer. Embedded, it sits in an element
+scroller's layer, and the bar's `backdrop-filter` layer snaps one device pixel
+differently in those layouts. The geometry, computed styles and viewer state
+are identical. The suite accepts such a difference only when every differing
+pixel lies inside that bar, and it reports each occurrence.
 
 ## Limits
 
@@ -181,6 +196,11 @@ compares them with the component, pixel by pixel:
   as `html`.
 - **Server rendering.** The component renders an empty box on the server and
   mounts the viewer on the client.
+- **`html` artifacts** should come from the bundled Archify release (3.1.0).
+  The viewer code is bundled, so an artifact from another release logs a
+  warning.
+- **Root-scroller rasterization.** See [Parity tests](#parity-tests): in a few
+  layouts the control bar's glyphs rasterize at a different sub-pixel phase.
 
 ## Development
 

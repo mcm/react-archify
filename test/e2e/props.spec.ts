@@ -140,9 +140,13 @@ test('maximize fills the browser window from an embedded box, Escape restores', 
   await page.locator('#btn-present').click();
   await page.waitForTimeout(800);
   expect(await host.boundingBox()).toEqual({ x: 0, y: 0, width: 1440, height: 900 });
-  // The stage is what Archify shows in a 1440x900 window.
+  // The stage is what Archify shows when its window grows from the box size
+  // to 1440x900 and then enters the stage (the same resize history).
   expect(await compareWithReference(page, 'classic', 'dark', {
+    init: (reference) => reference.setViewportSize({ width: 1100, height: 700 }),
     act: async (reference) => {
+      await reference.setViewportSize({ width: 1440, height: 900 });
+      await reference.waitForTimeout(800);
       await reference.locator('#btn-present').click();
       await reference.waitForTimeout(800);
     },
@@ -394,3 +398,28 @@ for (const [action, setup] of [
     expect(diff(expected.body, actual.body, path.resolve('test-results', 'props', `${action}.png`)).pixels).toBe(0);
   });
 }
+
+test('motion Still/Live toggles exactly as in Archify', async ({ browser }) => {
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, reducedMotion: 'no-preference' });
+  const component = await context.newPage();
+  await component.goto(fixtureUrl(EXAMPLE, 'signal-flow', 'dark'));
+  await settle(component, 'component');
+  const reference = await context.newPage();
+  await reference.goto(referenceUrl(EXAMPLE, 'signal-flow', 'dark'));
+  await settle(reference, 'reference');
+  const state = (page: Page, scoped: boolean) => page.evaluate((inShadow) => {
+    const root = inShadow ? document.querySelector('[data-react-archify-host]')!.shadowRoot! : document;
+    const html = inShadow ? root.querySelector('.archify-html')! : document.documentElement;
+    const button = root.querySelector('#btn-motion')!;
+    return [html.getAttribute('data-motion'), html.getAttribute('data-ambient-motion'), button.getAttribute('aria-pressed'), button.textContent!.trim()].join('|');
+  }, scoped);
+  expect(await state(component, true)).toBe(await state(reference, false));
+  for (const target of [reference, component]) await target.locator('#btn-motion').click();
+  await component.waitForTimeout(500);
+  expect(await state(component, true)).toBe(await state(reference, false));
+  expect(await state(component, true)).toContain('live');
+  for (const target of [reference, component]) await target.locator('#btn-motion').click();
+  await component.waitForTimeout(500);
+  expect(await state(component, true)).toBe(await state(reference, false));
+  await context.close();
+});
