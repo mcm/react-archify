@@ -181,8 +181,9 @@ bar's glyphs a fraction of a pixel differently. Standalone, Archify's content
 sits in Chrome's root-scroller layer. Embedded, it sits in an element
 scroller's layer, and the bar's `backdrop-filter` layer snaps one device pixel
 differently in those layouts. The geometry, computed styles and viewer state
-are identical. The suite accepts such a difference only when every differing
-pixel lies inside that bar, and it reports each occurrence.
+are identical. The same effect appears in one interaction scenario (focusing a node in a
+390px mobile layout). The suite accepts such a difference only when every
+differing pixel lies inside that bar, and it reports each occurrence.
 
 ## Limits
 

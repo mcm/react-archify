@@ -58,10 +58,11 @@ const DOCUMENT_CSS = `${FONT_CSS}
 [${HOST_ATTRIBUTE}][${PRESENTING_ATTRIBUTE}]::backdrop { background: transparent; }
 `;
 
-// Shadow-root base (zero-specificity on the wrappers, so every Archify rule
-// for html/body wins as it does over browser defaults): the frame plays the browser window (containing block for
-// fixed chrome, container for viewport queries/units), the scroller plays the
-// window scroll, and the wrapper elements play <html>, <head> and <body>.
+// Shadow-root base. The frame plays the browser window (containing block for
+// fixed chrome, container for viewport queries and units), the scroller plays
+// the window scroll, and the wrappers play <html>, <head> and <body>. Wrapper
+// rules have zero specificity so Archify's html/body rules always win, as
+// they do over browser defaults.
 const BASE_CSS = `
 :host {
   all: initial;
@@ -208,7 +209,7 @@ export class ViewerHost {
   private title = '';
   private documentPreset = 'classic';
   private registrations: Registration[] = [];
-  private wrapped = new Map<string, Map<EventListenerOrEventListenerObject, EventListener>>();
+  private wrapped = new Map<string, Map<EventListenerOrEventListenerObject, { inner: EventListener; outer: EventListener }>>();
   private timeouts = new Set<number>();
   private intervals = new Set<number>();
   private frames = new Set<number>();
@@ -217,11 +218,12 @@ export class ViewerHost {
   private resizeTarget = new EventTarget();
   private loadTarget = new EventTarget();
   private storage: InstanceStorage;
+  private session = new InstanceStorage({ pinned: {}, persist: false });
   private url!: UrlController;
   private archify: Record<string, any> | null = null;
   private api: ArchifyApi | null = null;
   private destroyed = false;
-  private originalToggles: { theme?: () => void; present?: () => void; exportOpen?: (...args: unknown[]) => unknown } = {};
+  private themeToggle: (() => void) | null = null;
   private presentObserver: MutationObserver | null = null;
   private frameObserver: ResizeObserver | null = null;
   private lastHash = '';
@@ -454,8 +456,7 @@ export class ViewerHost {
       this.systemThemeQuery.removeEventListener('change', this.onSystemTheme);
       this.systemThemeQuery = null;
     }
-    const toggle = this.originalToggles.theme;
-    if (toggle && this.htmlEl.getAttribute('data-theme') !== this.desiredTheme()) toggle();
+    if (this.themeToggle && this.htmlEl.getAttribute('data-theme') !== this.desiredTheme()) this.themeToggle();
   }
 
   private applyVariant(): void {
@@ -488,7 +489,7 @@ export class ViewerHost {
     const archify = this.archify;
     if (!archify) return;
     if (archify.theme) {
-      this.originalToggles.theme = archify.theme.toggle;
+      this.themeToggle = archify.theme.toggle;
       archify.theme.toggle = () => {};
     }
     if (archify.preset) archify.preset.cycle = () => false;
@@ -749,17 +750,14 @@ export class ViewerHost {
       }
       invoke(listener, thisArg, event);
     };
-    const pair = (() => {}) as unknown as EventListener;
-    byListener.set(listener, pair);
-    (pair as any).inner = inner;
-    (pair as any).outer = outer;
+    byListener.set(listener, { inner, outer });
     this.register(this.shadow, type, inner, options);
     this.register(source, type, outer, options);
   }
 
   private removeTreeListener(source: EventTarget, type: string, listener: EventListenerOrEventListenerObject, options: Options) {
     const key = `${type}:${captureFlag(options)}`;
-    const pair = this.wrapped.get(key)?.get(listener) as any;
+    const pair = this.wrapped.get(key)?.get(listener);
     if (!pair) return;
     this.wrapped.get(key)!.delete(listener);
     this.unregister(this.shadow, type, pair.inner, options);
@@ -890,7 +888,7 @@ export class ViewerHost {
       location: () => host.url.location,
       history: () => host.url.history,
       localStorage: () => host.storage,
-      sessionStorage: () => host.storage,
+      sessionStorage: () => host.session,
       window: () => windowProxy,
       self: () => windowProxy,
     };
@@ -912,7 +910,7 @@ export class ViewerHost {
       document: documentProxy,
       window: windowProxy,
       localStorage: this.storage,
-      sessionStorage: this.storage,
+      sessionStorage: this.session,
       history: this.url.history,
       location: this.url.location,
       navigator: window.navigator,
