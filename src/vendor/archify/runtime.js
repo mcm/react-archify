@@ -785,7 +785,7 @@ export function bootViewer(env) {
                   var at = part.indexOf('.diagram-container > svg');
                   if (at === -1) return null;
                   var prefix = part.slice(0, at).trim();
-                  try { if (prefix && !document.documentElement.matches(prefix)) return null; } catch (_) { return null; }
+                  try { if (prefix && !env.matchesRoot(prefix)) return null; } catch (_) { return null; }
                   return 'svg' + part.slice(at + '.diagram-container > svg'.length);
                 }).filter(Boolean);
                 if (scoped.length) out.push(scoped.join(', ') + ' { ' + rule.style.cssText + ' }');

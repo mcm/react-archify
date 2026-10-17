@@ -3,12 +3,13 @@
 // example, visual preset and theme — at the top and scrolled to the end.
 import { expect, test, type Page } from '@playwright/test';
 import path from 'node:path';
-import { THEMES, VARIANTS, diff, examples, fixtureUrl, referenceUrl, settle } from './support';
+import { THEMES, VARIANTS, diff, hidePropOwnedChrome, examples, fixtureUrl, referenceUrl, settle } from './support';
 
 const ONLY = process.env.PARITY_ONLY;
 const cases = examples().filter((example) => !ONLY || example.includes(ONLY));
 
 test.use({ reducedMotion: 'reduce' });
+
 
 async function scrollToEnd(page: Page, scope: 'reference' | 'component') {
   await page.evaluate((which) => {
@@ -30,8 +31,9 @@ for (const example of cases) {
         const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, reducedMotion: 'reduce' });
         const reference = await context.newPage();
         const component = await context.newPage();
+        await hidePropOwnedChrome(reference);
         await reference.goto(referenceUrl(example, variant, theme));
-        await component.goto(fixtureUrl(example, variant, theme));
+                await component.goto(fixtureUrl(example, variant, theme));
         await settle(reference, 'reference');
         await settle(component, 'component');
         const name = `${example}.${variant}.${theme}`;
@@ -43,6 +45,33 @@ for (const example of cases) {
         await context.close();
         expect.soft(top.pixels, `top of ${name} differs (${top.size})`).toBe(0);
         expect.soft(end.pixels, `end of ${name} differs (${end.size})`).toBe(0);
+      });
+    }
+  }
+}
+
+// The component placed inside a scrolling host page, away from the window
+// origin, must paint what Archify paints in a window the size of its box.
+const OFFSET_BOX = { width: 1100, height: 700 };
+for (const example of ['web-app.architecture.json', 'cache-miss-request.sequence.json']) {
+  for (const variant of VARIANTS) {
+    for (const theme of THEMES) {
+      test(`offset box · ${example} · ${variant} · ${theme}`, async ({ browser }) => {
+        const referenceContext = await browser.newContext({ viewport: OFFSET_BOX, reducedMotion: 'reduce' });
+        const componentContext = await browser.newContext({ viewport: { width: 1440, height: 900 }, reducedMotion: 'reduce' });
+        const reference = await referenceContext.newPage();
+        const component = await componentContext.newPage();
+        await hidePropOwnedChrome(reference);
+        await reference.goto(referenceUrl(example, variant, theme));
+                await component.goto(fixtureUrl(example, variant, theme, '&offset=1'));
+        await settle(reference, 'reference');
+        await settle(component, 'component');
+        const box = (await component.locator('[data-react-archify-host]').boundingBox())!;
+        const name = `offset.${example}.${variant}.${theme}`;
+        const result = diff(await reference.screenshot(), await component.screenshot({ clip: box }), path.resolve('test-results', 'parity', `${name}.png`));
+        await referenceContext.close();
+        await componentContext.close();
+        expect(result.pixels, `${name} differs (${result.size})`).toBe(0);
       });
     }
   }

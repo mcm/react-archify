@@ -317,14 +317,24 @@ function extractBlock(template, open, close, label) {
 }
 
 // html/body/:root become the wrapper elements that stand in for them inside
-// the shadow root. The original selectors stay available to the SVG export
-// through ORIGINAL_CSS.
+// the shadow root. Specificity must not change, or cascade ties resolve
+// differently: html/body (one type) become div:where(.wrapper) (one type),
+// and :root (one pseudo-class) becomes .wrapper (one class). The original
+// selectors stay available to the SVG export through ORIGINAL_CSS.
+function wrapperSelector(className) {
+  const where = selectorParser.pseudo({ value: ':where' });
+  const inner = selectorParser.selector();
+  inner.append(selectorParser.className({ value: className }));
+  where.append(inner);
+  return [selectorParser.tag({ value: 'div' }), where];
+}
+
 const rootSelectorTransform = selectorParser((selectors) => {
   selectors.walk((node) => {
     if (node.type === 'tag' && node.value.toLowerCase() === 'html') {
-      node.replaceWith(selectorParser.className({ value: ROOT_CLASS }));
+      node.replaceWith(...wrapperSelector(ROOT_CLASS));
     } else if (node.type === 'tag' && node.value.toLowerCase() === 'body') {
-      node.replaceWith(selectorParser.className({ value: BODY_CLASS }));
+      node.replaceWith(...wrapperSelector(BODY_CLASS));
     } else if (node.type === 'pseudo' && node.value === ':root') {
       node.replaceWith(selectorParser.className({ value: ROOT_CLASS }));
     }
@@ -353,6 +363,30 @@ function scopeCss(css) {
   ast.walkDecls((decl) => {
     decl.value = viewportValue(decl.value);
   });
+  // background-attachment: fixed paints against the browser window. Inside
+  // the component the box is the window, so the page background scrolls with
+  // the body but is offset by the scroll position (which the host publishes
+  // as --archify-fixed-x/y) and sized to the box, the way a fixed background
+  // is positioned and sized against the viewport.
+  ast.walkDecls('background-attachment', (decl) => {
+    if (decl.value.trim() !== 'fixed') return;
+    const rule = decl.parent;
+    if (!rule.selector.split(',').every((part) => /\.archify-body\)\s*$/.test(part.trim()))) {
+      fail(`fixed background on an unsupported element: ${rule.selector}`);
+    }
+    decl.value = 'scroll';
+    let size = null;
+    let position = null;
+    rule.walkDecls((other) => {
+      if (other.prop === 'background-size') size = other;
+      if (other.prop === 'background-position') position = other;
+    });
+    if (!size) rule.append({ prop: 'background-size', value: '100cqw 100cqh' });
+    const [x = '0px', y = '0px'] = position ? position.value.trim().split(/\s+/) : [];
+    const shifted = `calc(${x} + var(--archify-fixed-x, 0px)) calc(${y} + var(--archify-fixed-y, 0px))`;
+    if (position) position.value = shifted;
+    else rule.append({ prop: 'background-position', value: shifted });
+  });
   ast.walkAtRules('media', (atRule) => {
     const params = atRule.params;
     const viewportFeature = /\((min|max)-(width|height)\s*:/;
@@ -374,6 +408,8 @@ function transformRuntime(script) {
   out = replaceCounted(out, /\bevent\.clientX\b/g, '(event.clientX - env.originX())', 7, 'runtime clientX');
   out = replaceCounted(out, /\bevent\.clientY\b/g, '(event.clientY - env.originY())', 7, 'runtime clientY');
   if (/getClientRects|elementFromPoint|elementsFromPoint/.test(out)) fail('runtime: unhandled viewport geometry API');
+  // Selector tests against <html> use the stylesheet's html/body/:root names.
+  out = replaceCounted(out, /document\.documentElement\.matches\(/g, 'env.matchesRoot(', 1, 'runtime root matches');
   // Selector strings that name html/body directly.
   if (/querySelector(All)?\(\s*['"][^'"]*\b(html|body)\b/.test(out)) fail('runtime: selector names html/body');
   return out;
@@ -433,6 +469,10 @@ export const ORIGINAL_CSS = ${JSON.stringify(originalCss)};
 
 // JetBrains Mono faces (SIL OFL 1.1, license text inside).
 export const FONT_CSS = ${JSON.stringify(fontCss)};
+
+// The exact text of the template's <style id="archify-fonts">, which the SVG
+// export copies into standalone SVGs.
+export const FONT_STYLE_TEXT = ${JSON.stringify(`\n${fontCss}  `)};
 `);
 
   const runtime = transformRuntime(mainScript);
@@ -472,8 +512,8 @@ function syncNotices(checkout) {
 // Declarations for the vendored modules the TypeScript sources import.
 function syncDeclarations() {
   const declarations = {
-    'runtime.d.ts': 'export declare function bootViewer(env: {\n  globals: Record<string, unknown>;\n  rect: symbol;\n  screenCTM: symbol;\n  originX(): number;\n  originY(): number;\n}): Record<string, any>;\n',
-    'styles.d.ts': 'export declare const ROOT_CLASS: string;\nexport declare const BODY_CLASS: string;\nexport declare const VIEWPORT_CONTAINER: string;\nexport declare const SCOPED_CSS: string;\nexport declare const ORIGINAL_CSS: string;\nexport declare const FONT_CSS: string;\n',
+    'runtime.d.ts': 'export declare function bootViewer(env: {\n  globals: Record<string, unknown>;\n  matchesRoot(selector: string): boolean;\n  rect: symbol;\n  screenCTM: symbol;\n  originX(): number;\n  originY(): number;\n}): Record<string, any>;\n',
+    'styles.d.ts': 'export declare const FONT_STYLE_TEXT: string;\nexport declare const ROOT_CLASS: string;\nexport declare const BODY_CLASS: string;\nexport declare const VIEWPORT_CONTAINER: string;\nexport declare const SCOPED_CSS: string;\nexport declare const ORIGINAL_CSS: string;\nexport declare const FONT_CSS: string;\n',
     'template.d.ts': 'export declare const SHELL_TEMPLATE: string;\n',
     'full-template.d.ts': 'export declare const FULL_TEMPLATE: string;\n',
     'version.d.ts': 'export declare const ARCHIFY_VERSION: string;\nexport declare const ARCHIFY_COMMIT: string;\n',

@@ -54,3 +54,26 @@ export function diff(a: Buffer, b: Buffer, out?: string) {
   }
   return { pixels, ratio: pixels / (left.width * left.height), size: `${left.width}x${left.height}` };
 }
+
+// The documented differences: the theme toggle and the style menu are props.
+// Hidden before Archify's script runs, so its chrome layout measures the
+// toolbar the component shows.
+export async function hidePropOwnedChrome(page: Page) {
+  await injectEarlyStyle(page, 'html body .toolbar #btn-theme, html body .toolbar .preset-wrap { display: none !important; }');
+}
+
+/** Add a stylesheet as soon as <head> exists, ahead of every page script. */
+export async function injectEarlyStyle(page: Page, css: string) {
+  await page.addInitScript((text) => {
+    const attach = () => {
+      if (!document.head) return false;
+      const style = document.createElement('style');
+      style.textContent = text;
+      document.head.appendChild(style);
+      return true;
+    };
+    if (attach()) return;
+    const observer = new MutationObserver(() => { if (attach()) observer.disconnect(); });
+    observer.observe(document, { childList: true, subtree: true });
+  }, css);
+}

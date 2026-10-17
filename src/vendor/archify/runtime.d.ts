@@ -2,6 +2,7 @@
 // Do not edit; re-run `npm run sync:archify`.
 export declare function bootViewer(env: {
   globals: Record<string, unknown>;
+  matchesRoot(selector: string): boolean;
   rect: symbol;
   screenCTM: symbol;
   originX(): number;

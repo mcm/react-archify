@@ -3,7 +3,7 @@
 // expect (a document, a window, a URL, storage) scoped to the component box.
 
 import { bootViewer } from '../vendor/archify/runtime.js';
-import { BODY_CLASS, FONT_CSS, ORIGINAL_CSS, ROOT_CLASS, SCOPED_CSS } from '../vendor/archify/styles.js';
+import { BODY_CLASS, FONT_CSS, FONT_STYLE_TEXT, ORIGINAL_CSS, ROOT_CLASS, SCOPED_CSS } from '../vendor/archify/styles.js';
 import { installGeometry, RECT, registerOrigin, SCREEN_CTM, unregisterOrigin } from './geometry';
 import { createPrivateUrl, createSyncedUrl, type UrlController } from './location';
 import { InstanceStorage } from './storage';
@@ -57,7 +57,8 @@ const DOCUMENT_CSS = `${FONT_CSS}
 [${HOST_ATTRIBUTE}][${PRESENTING_ATTRIBUTE}]::backdrop { background: transparent; }
 `;
 
-// Shadow-root base: the frame plays the browser window (containing block for
+// Shadow-root base (zero-specificity on the wrappers, so every Archify rule
+// for html/body wins as it does over browser defaults): the frame plays the browser window (containing block for
 // fixed chrome, container for viewport queries/units), the scroller plays the
 // window scroll, and the wrapper elements play <html>, <head> and <body>.
 const BASE_CSS = `
@@ -73,7 +74,7 @@ const BASE_CSS = `
   position: absolute;
   inset: 0;
   overflow: hidden;
-  contain: layout paint;
+  contain: layout;
   container: archify-viewport / size;
 }
 .${SCROLLER_CLASS} {
@@ -81,7 +82,7 @@ const BASE_CSS = `
   inset: 0;
   overflow: auto;
 }
-.${ROOT_CLASS} {
+:where(.${ROOT_CLASS}) {
   display: block;
   font-size: 16px;
   line-height: normal;
@@ -89,18 +90,17 @@ const BASE_CSS = `
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
 }
-.${BODY_CLASS} { display: block; }
+:where(.${BODY_CLASS}) { display: block; }
 .${HEAD_CLASS} { display: none !important; }
 `;
 
 // Chrome the props own. The theme toggle and style menu become props; the
 // maximize button and export menu can be switched off.
 const CONTROL_CSS = `
-.${FRAME_CLASS} #btn-theme,
-.${FRAME_CLASS} .preset-wrap { display: none !important; }
-.${FRAME_CLASS}[data-hide-maximize] #btn-present { display: none !important; }
-.${FRAME_CLASS}[data-hide-export] #btn-export,
-.${FRAME_CLASS}[data-hide-export] .export-wrap { display: none !important; }
+.${FRAME_CLASS} .toolbar #btn-theme,
+.${FRAME_CLASS} .toolbar .preset-wrap { display: none !important; }
+.${FRAME_CLASS}[data-hide-maximize] .toolbar #btn-present { display: none !important; }
+.${FRAME_CLASS}[data-hide-export] .toolbar #btn-export { display: none !important; }
 `;
 
 let documentStyle: HTMLStyleElement | null = null;
@@ -121,7 +121,35 @@ function releaseDocumentStyle() {
     documentStyle.remove();
     documentStyle = null;
     documentStyleUsers = 0;
+    fontsLoaded = null;
   }
+}
+
+// In a standalone artifact the bundled font is still loading when the viewer
+// script runs, so the viewer's document.fonts.ready re-measures (legend
+// badges, label fits) land after it. On a host page fonts.ready has long
+// resolved, so the faces are loaded before the viewer boots instead and every
+// measurement sees the final metrics.
+let fontsLoaded: Promise<void> | null = null;
+
+// One character from each bundled subset: latin, latin-ext, cyrillic,
+// cyrillic-ext, greek and vietnamese.
+const FONT_SAMPLE = 'AĀЖѢΩạ';
+
+function loadBundledFonts(): Promise<void> {
+  if (fontsLoaded) return fontsLoaded;
+  const load = (weight: number) => document.fonts.load(`${weight} 12px "JetBrains Mono"`, FONT_SAMPLE);
+  fontsLoaded = Promise.all([load(400), load(800)]).then(() => undefined, () => undefined);
+  return fontsLoaded;
+}
+
+// The stylesheet's html/body/:root mapping (sync-archify.mjs), for selectors
+// the viewer tests at runtime.
+function scopeSelector(selector: string): string {
+  return selector
+    .replace(/(^|[\s>+~,(])html(?=$|[\s.#[:>+~,)])/gi, `$1.${ROOT_CLASS}`)
+    .replace(/(^|[\s>+~,(])body(?=$|[\s.#[:>+~,)])/gi, `$1.${BODY_CLASS}`)
+    .replace(/:root\b/g, `.${ROOT_CLASS}`);
 }
 
 let originalSheet: CSSStyleSheet | null = null;
@@ -179,6 +207,7 @@ export class ViewerHost {
   private headEl!: HTMLDivElement;
   private bodyEl!: HTMLDivElement;
   private title = '';
+  private documentPreset = 'classic';
   private registrations: Registration[] = [];
   private wrapped = new Map<string, Map<EventListenerOrEventListenerObject, EventListener>>();
   private timeouts = new Set<number>();
@@ -199,6 +228,10 @@ export class ViewerHost {
   private lastHash = '';
   private systemThemeQuery: MediaQueryList | null = null;
   private onSystemTheme = () => this.applyTheme();
+  private onScroll = () => {
+    this.bodyEl.style.setProperty('--archify-fixed-x', `${this.scroller.scrollLeft}px`);
+    this.bodyEl.style.setProperty('--archify-fixed-y', `${this.scroller.scrollTop}px`);
+  };
   private onDocumentPointer = (event: Event) => {
     if (event.composedPath().includes(this.host)) keyboardOwner = this;
     else if (keyboardOwner === this) keyboardOwner = null;
@@ -246,6 +279,7 @@ export class ViewerHost {
       else query.removeEventListener(type, listener as EventListener);
     }
     this.systemThemeQuery?.removeEventListener('change', this.onSystemTheme);
+    this.scroller.removeEventListener('scroll', this.onScroll);
     this.presentObserver?.disconnect();
     this.frameObserver?.disconnect();
     document.removeEventListener('pointerdown', this.onDocumentPointer, true);
@@ -293,7 +327,7 @@ export class ViewerHost {
     const fonts = document.createElement('style');
     fonts.id = 'archify-fonts';
     fonts.media = 'not all';
-    fonts.textContent = FONT_CSS;
+    fonts.textContent = FONT_STYLE_TEXT;
     this.headEl.appendChild(fonts);
     const keep = (node: Node) => {
       if (!(node instanceof Element)) return true;
@@ -314,6 +348,14 @@ export class ViewerHost {
       this.bodyEl.appendChild(imported);
     }
 
+    // The initial variant is applied as if authored (meta.visual_preset only
+    // sets these two attributes), so the viewer boots and measures in it.
+    this.documentPreset = this.htmlEl.getAttribute('data-preset') || 'classic';
+    if (this.options.variant) {
+      this.htmlEl.setAttribute('data-preset', this.options.variant);
+      this.bodyEl.querySelector('.diagram-container > svg')?.setAttribute('data-preset', this.options.variant);
+    }
+
     this.htmlEl.append(this.headEl, this.bodyEl);
     this.scroller.appendChild(this.htmlEl);
     this.frame.appendChild(this.scroller);
@@ -329,6 +371,9 @@ export class ViewerHost {
       : createPrivateUrl(this.options.initialView ?? '', () => this.emitViewChange());
     this.lastHash = this.url.hash();
 
+    // Fixed page backgrounds follow the box's scroll (see sync-archify.mjs).
+    this.scroller.addEventListener('scroll', this.onScroll, { passive: true });
+
     this.frameObserver = new ResizeObserver(() => this.resizeTarget.dispatchEvent(new Event('resize')));
     this.frameObserver.observe(this.frame);
     document.addEventListener('pointerdown', this.onDocumentPointer, true);
@@ -336,7 +381,14 @@ export class ViewerHost {
     this.presentObserver = new MutationObserver(() => this.syncPresenting());
     this.presentObserver.observe(this.htmlEl, { attributes: true, attributeFilter: ['data-present'] });
 
-    this.boot();
+    // Nothing paints until the viewer has booted, as in a standalone page
+    // whose script runs before first paint.
+    this.frame.style.visibility = 'hidden';
+    loadBundledFonts().then(() => {
+      if (this.destroyed) return;
+      this.boot();
+      this.frame.style.removeProperty('visibility');
+    });
   }
 
   private boot(): void {
@@ -346,6 +398,7 @@ export class ViewerHost {
       screenCTM: SCREEN_CTM,
       originX: () => this.frame.getBoundingClientRect().left,
       originY: () => this.frame.getBoundingClientRect().top,
+      matchesRoot: (selector: string) => this.htmlEl.matches(scopeSelector(selector)),
     }) as Record<string, any>;
     this.archify = archify;
     this.guardShortcuts();
@@ -398,7 +451,7 @@ export class ViewerHost {
   private applyVariant(): void {
     const preset = this.archify?.preset;
     if (!preset) return;
-    const target = this.options.variant ?? preset.authored;
+    const target = this.options.variant ?? this.documentPreset;
     if (preset.current() !== target) preset.apply(target);
   }
 
@@ -484,6 +537,43 @@ export class ViewerHost {
     this.url.location.hash = normalized;
   }
 
+  // In a fresh page the bundled font finishes loading a few frames after the
+  // viewer script, after window load: the viewer's fonts.ready re-measures
+  // run then, once every module has done its first-frame work. On a host
+  // page fonts.ready has long resolved, so the viewer sees a FontFaceSet whose
+  // ready settles the way a fresh page's does: after the load replay and a
+  // frame, and after the real fonts.
+  private fontsReady: Promise<FontFaceSet> | null = null;
+  private fontsSettled = false;
+
+  private fontsFacade(): FontFaceSet {
+    if (!this.fontsReady) {
+      this.fontsReady = new Promise<void>((resolve) => {
+        this.trackFrame(() => this.trackFrame(() => this.trackFrame(() => resolve())));
+      }).then(() => document.fonts.ready).then(() => {
+        this.fontsSettled = true;
+        return document.fonts;
+      });
+    }
+    const host = this;
+    return new Proxy(document.fonts, {
+      get(target, key) {
+        if (key === 'ready') return host.fontsReady;
+        if (key === 'status') return host.fontsSettled ? target.status : 'loading';
+        const value = Reflect.get(target, key, target);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+  }
+
+  // Archify's joint reader + viewer-chrome stability (fonts included).
+  private whenStable(): Promise<unknown> {
+    const archify = this.archify;
+    if (archify?.layoutStability?.whenStable) return archify.layoutStability.whenStable();
+    if (archify?.readerLayout?.whenStable) return archify.readerLayout.whenStable();
+    return Promise.resolve();
+  }
+
   private createApi(): ArchifyApi {
     const archify = this.archify!;
     return {
@@ -498,7 +588,7 @@ export class ViewerHost {
       resetZoom: () => archify.view.reset(),
       export: (format) => archify.exportMenu.run(format),
       clearFocus: () => archify.focus?.clear?.({}),
-      waitForStableLayout: () => (archify.readerLayout?.whenStable ? archify.readerLayout.whenStable() : Promise.resolve()),
+      waitForStableLayout: () => this.whenStable(),
       shadowRoot: this.shadow,
     };
   }
@@ -659,17 +749,21 @@ export class ViewerHost {
       scrollingElement: () => scroller,
       activeElement: () => shadow.activeElement ?? bodyEl,
       title: () => host.title,
+      // In tree order, as document.styleSheets is: the delivered stylesheet
+      // stands where the template's <style> was, followed by styles the
+      // viewer added to <head> and the diagram's own SVG styles.
       styleSheets: () => {
         const sheets: CSSStyleSheet[] = [];
         const original = exportSheet();
         if (original) sheets.push(original);
-        headEl.querySelectorAll('style').forEach((element) => {
+        htmlEl.querySelectorAll('style').forEach((element) => {
           if (element.id !== 'archify-fonts' && element.sheet) sheets.push(element.sheet);
         });
         return sheets;
       },
       defaultView: () => windowProxy,
       location: () => host.url.location,
+      fonts: () => host.fontsFacade(),
     };
     const documentProxy: Document = new Proxy(document, {
       get(target, key) {
